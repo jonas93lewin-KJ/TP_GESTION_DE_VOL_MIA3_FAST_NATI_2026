@@ -1,0 +1,558 @@
+// ======================================================================
+//  AGENCE DE VOYAGE
+//  Gestion des passagers, des vols, des réservations, des paiements
+//  et des annulations - Application console en C++ (POO)
+//
+//  Compilation : g++ -std=c++17 -Wall -Wextra -o agence agence_voyage.cpp
+// ======================================================================
+
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
+#include <functional>
+#include <iomanip>
+#include <iostream>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#endif
+
+using namespace std;
+
+// ======================================================================
+//  1. UTILITAIRES
+// ======================================================================
+
+// Date du jour au format JJ/MM/AAAA
+string dateDuJour() {
+    time_t maintenant = time(nullptr);
+    tm* t = localtime(&maintenant);
+    char tampon[11];
+    strftime(tampon, sizeof(tampon), "%d/%m/%Y", t);
+    return string(tampon);
+}
+
+// Aujourd'hui à minuit
+time_t minuitAujourdhui() {
+    time_t maintenant = time(nullptr);
+    tm t = *localtime(&maintenant);
+    t.tm_hour = 0;
+    t.tm_min = 0;
+    t.tm_sec = 0;
+    t.tm_isdst = -1;
+    return mktime(&t);
+}
+
+// Convertit "JJ/MM/AAAA" en time_t (à minuit).
+// Retourne false si le format ou la date est invalide.
+bool analyserDate(const string& texte, time_t& resultat) {
+    int j, m, a;
+    char reste;
+    if (sscanf(texte.c_str(), "%d/%d/%d %c", &j, &m, &a, &reste) != 3) return false;
+    tm t = {};
+    t.tm_mday = j;
+    t.tm_mon = m - 1;
+    t.tm_year = a - 1900;
+    t.tm_isdst = -1;
+    time_t r = mktime(&t);
+    if (r == static_cast<time_t>(-1) || t.tm_mday != j || t.tm_mon != m - 1 ||
+        t.tm_year != a - 1900)
+        return false;
+    resultat = r;
+    return true;
+}
+
+bool dateValide(const string& texte) {
+    time_t t;
+    return analyserDate(texte, t);
+}
+
+// Téléphone : 8 à 15 chiffres, avec éventuellement '+' et espaces
+bool telephoneValide(const string& t) {
+    int chiffres = 0;
+    for (char c : t) {
+        if (isdigit(static_cast<unsigned char>(c)))
+            ++chiffres;
+        else if (c != '+' && c != ' ')
+            return false;
+    }
+    return chiffres >= 8 && chiffres <= 15;
+}
+
+// Email : forme minimale  x@y.z
+bool emailValide(const string& e) {
+    if (e.find(' ') != string::npos) return false;
+    size_t arobase = e.find('@');
+    if (arobase == string::npos || arobase == 0) return false;
+    size_t point = e.find('.', arobase);
+    return point != string::npos && point > arobase + 1 && point < e.size() - 1;
+}
+
+string enMajuscules(string s) {
+    transform(s.begin(), s.end(), s.begin(),
+              [](unsigned char c) { return static_cast<char>(toupper(c)); });
+    return s;
+}
+
+string nettoyer(const string& s) {
+    size_t debut = s.find_first_not_of(" \t\r\n");
+    if (debut == string::npos) return "";
+    size_t fin = s.find_last_not_of(" \t\r\n");
+    return s.substr(debut, fin - debut + 1);
+}
+
+// ======================================================================
+//  2. ÉNUMÉRATIONS
+// ======================================================================
+
+enum class StatutReservation { EN_ATTENTE, VALIDEE, ANNULEE };
+enum class StatutPaiement { PAYE, REMBOURSE, NON_REMBOURSABLE };
+
+string texte(StatutReservation s) {
+    switch (s) {
+        case StatutReservation::EN_ATTENTE: return "EN_ATTENTE";
+        case StatutReservation::VALIDEE: return "VALIDEE";
+        case StatutReservation::ANNULEE: return "ANNULEE";
+    }
+    return "";
+}
+
+string texte(StatutPaiement s) {
+    switch (s) {
+        case StatutPaiement::PAYE: return "PAYE";
+        case StatutPaiement::REMBOURSE: return "REMBOURSE";
+        case StatutPaiement::NON_REMBOURSABLE: return "NON_REMBOURSABLE";
+    }
+    return "";
+}
+
+// ======================================================================
+//  3. CLASSE PASSAGER
+// ======================================================================
+
+class Passager {
+private:
+    int id;
+    string nom;
+    string prenom;
+    string telephone;
+    string email;
+
+public:
+    Passager(int id, const string& nom, const string& prenom, const string& telephone,
+             const string& email)
+        : id(id) {
+        setNom(nom);
+        setPrenom(prenom);
+        setTelephone(telephone);
+        setEmail(email);
+    }
+
+    // Accesseurs
+    int getId() const { return id; }
+    const string& getNom() const { return nom; }
+    const string& getPrenom() const { return prenom; }
+    const string& getTelephone() const { return telephone; }
+    const string& getEmail() const { return email; }
+
+    // Modificateurs (avec contrôle de validité)
+    void setNom(const string& n) {
+        if (n.empty()) throw invalid_argument("Le nom est obligatoire.");
+        nom = n;
+    }
+    void setPrenom(const string& p) {
+        if (p.empty()) throw invalid_argument("Le prénom est obligatoire.");
+        prenom = p;
+    }
+    void setTelephone(const string& t) {
+        if (!telephoneValide(t))
+            throw invalid_argument("Téléphone invalide (8 à 15 chiffres attendus).");
+        telephone = t;
+    }
+    void setEmail(const string& e) {
+        if (!emailValide(e)) throw invalid_argument("Email invalide (exemple : nom@mail.com).");
+        email = e;
+    }
+
+    void afficher() const {
+        cout << "Passager n°" << id << " : " << prenom << " " << nom << " | Tél : " << telephone
+             << " | Email : " << email << "\n";
+    }
+};
+
+// ======================================================================
+//  4. CLASSE VOL
+// ======================================================================
+
+class Vol {
+private:
+    string numero;
+    string depart;
+    string destination;
+    string dateDepart;  // format JJ/MM/AAAA
+    int capacite;
+    int placesReservees;  // places des réservations VALIDÉES uniquement
+
+public:
+    Vol(const string& numero, const string& depart, const string& destination,
+        const string& dateDepart, int capacite)
+        : capacite(0), placesReservees(0) {
+        if (numero.empty()) throw invalid_argument("Le numéro de vol est obligatoire.");
+        this->numero = enMajuscules(numero);
+        setDepart(depart);
+        setDestination(destination);
+        setDateDepart(dateDepart);
+        setCapacite(capacite);
+    }
+
+    // Accesseurs
+    const string& getNumero() const { return numero; }
+    const string& getDepart() const { return depart; }
+    const string& getDestination() const { return destination; }
+    const string& getDateDepart() const { return dateDepart; }
+    int getCapacite() const { return capacite; }
+    int getPlacesReservees() const { return placesReservees; }
+
+    // Modificateurs (avec contrôle de validité)
+    void setDepart(const string& d) {
+        if (d.empty()) throw invalid_argument("La ville de départ est obligatoire.");
+        depart = d;
+    }
+    void setDestination(const string& d) {
+        if (d.empty()) throw invalid_argument("La destination est obligatoire.");
+        destination = d;
+    }
+    void setDateDepart(const string& d) {
+        if (!dateValide(d)) throw invalid_argument("Date invalide (format JJ/MM/AAAA).");
+        dateDepart = d;
+    }
+    void setCapacite(int c) {
+        if (c <= 0) throw invalid_argument("La capacité doit être positive.");
+        if (c < placesReservees)
+            throw invalid_argument("La capacité est inférieure au nombre de places déjà réservées.");
+        capacite = c;
+    }
+
+    // Gestion des places
+    int placesDisponibles() const { return capacite - placesReservees; }
+
+    // Règle 2 : on ne dépasse jamais la capacité du vol
+    bool reserverPlace() {
+        if (placesReservees >= capacite) return false;
+        ++placesReservees;
+        return true;
+    }
+
+    void libererPlace() {
+        if (placesReservees > 0) --placesReservees;
+    }
+
+    // Un vol est parti si sa date de départ est avant aujourd'hui
+    bool dejaParti() const {
+        time_t depart_t;
+        if (!analyserDate(dateDepart, depart_t)) return true;
+        return depart_t < minuitAujourdhui();
+    }
+
+    bool estDisponible() const { return placesDisponibles() > 0 && !dejaParti(); }
+
+    // Le départ est considéré à minuit le jour de la date de départ
+    bool departDansPlusDe24h() const {
+        time_t depart_t;
+        if (!analyserDate(dateDepart, depart_t)) return false;
+        return difftime(depart_t, time(nullptr)) > 24 * 3600;
+    }
+
+    void afficher() const {
+        cout << "Vol " << numero << " : " << depart << " -> " << destination << " | Départ : "
+             << dateDepart << " | Places : " << placesReservees << "/" << capacite
+             << " (disponibles : " << placesDisponibles() << ")\n";
+    }
+};
+
+// ======================================================================
+//  5. CLASSE PAIEMENT
+// ======================================================================
+
+class Paiement {
+private:
+    int id;
+    double montant;
+    string datePaiement;
+    StatutPaiement statut;
+
+public:
+    Paiement(int id, double montant)
+        : id(id), montant(montant), datePaiement(""), statut(StatutPaiement::PAYE) {
+        if (montant <= 0) throw invalid_argument("Le montant doit être positif.");
+    }
+
+    int getId() const { return id; }
+    double getMontant() const { return montant; }
+    StatutPaiement getStatut() const { return statut; }
+
+    // Enregistre le paiement (date du jour)
+    bool effectuer() {
+        datePaiement = dateDuJour();
+        statut = StatutPaiement::PAYE;
+        return true;
+    }
+
+    // Règle 7 : traitement d'un paiement après annulation
+    void rembourser() {
+        if (statut == StatutPaiement::PAYE) statut = StatutPaiement::REMBOURSE;
+    }
+    void refuserRemboursement() {
+        if (statut == StatutPaiement::PAYE) statut = StatutPaiement::NON_REMBOURSABLE;
+    }
+
+    void afficher() const {
+        cout << "n°" << id << " | Montant : " << montant << " | Date : " << datePaiement
+             << " | Statut : " << texte(statut) << "\n";
+    }
+};
+
+// ======================================================================
+//  6. CLASSE RESERVATION
+//  Associée à UN SEUL passager et à UN SEUL vol (règle 4)
+//  et à 0 ou 1 paiement (composition).
+// ======================================================================
+
+class Reservation {
+private:
+    int id;
+    string dateReservation;
+    StatutReservation statut;
+    Passager* passager;
+    Vol* vol;
+    unique_ptr<Paiement> paiement;
+
+public:
+    Reservation(int id, Passager* passager, Vol* vol)
+        : id(id),
+          dateReservation(dateDuJour()),
+          statut(StatutReservation::EN_ATTENTE),
+          passager(passager),
+          vol(vol) {
+        if (passager == nullptr || vol == nullptr)
+            throw invalid_argument("Une réservation exige un passager et un vol.");
+    }
+
+    // Accesseurs
+    int getId() const { return id; }
+    StatutReservation getStatut() const { return statut; }
+    Passager* getPassager() const { return passager; }
+    Vol* getVol() const { return vol; }
+    Paiement* getPaiement() const { return paiement.get(); }
+    bool estAnnulee() const { return statut == StatutReservation::ANNULEE; }
+
+    // Règle 6 : la place n'est définitivement réservée qu'après validation
+    bool valider() {
+        if (statut != StatutReservation::EN_ATTENTE) return false;
+        if (!vol->reserverPlace()) return false;  // vol complet
+        statut = StatutReservation::VALIDEE;
+        return true;
+    }
+
+    // Annulation : libère la place si elle avait été validée
+    void annuler() {
+        if (estAnnulee()) return;
+        if (statut == StatutReservation::VALIDEE) vol->libererPlace();
+        statut = StatutReservation::ANNULEE;
+    }
+
+    // Règle 5 : une réservation annulée ne peut plus recevoir de paiement.
+    // Règle 6 : le paiement valide la réservation (la place est alors réservée).
+    void enregistrerPaiement(unique_ptr<Paiement> p) {
+        if (estAnnulee()) throw runtime_error("Réservation annulée : paiement impossible.");
+        if (paiement != nullptr) throw runtime_error("Cette réservation est déjà payée.");
+        if (statut == StatutReservation::EN_ATTENTE && !valider())
+            throw runtime_error("Vol complet : plus de place disponible, paiement refusé.");
+        p->effectuer();
+        paiement = move(p);
+    }
+
+    // Résumé sur une ligne (menu : Consulter une réservation)
+    void resume() const {
+        cout << "Réservation n°" << id << " | " << texte(statut) << " | " << passager->getPrenom()
+             << " " << passager->getNom() << " | Vol " << vol->getNumero() << " | Paiement : "
+             << (paiement ? texte(paiement->getStatut()) : string("aucun")) << "\n";
+    }
+
+    // Détails complets (menu : Afficher les informations d'une réservation)
+    void afficher() const {
+        cout << "Réservation n°" << id << " | Date : " << dateReservation
+             << " | Statut : " << texte(statut) << "\n"
+             << "   Passager : " << passager->getPrenom() << " " << passager->getNom() << " (n°"
+             << passager->getId() << ") | Tél : " << passager->getTelephone()
+             << " | Email : " << passager->getEmail() << "\n"
+             << "   Vol      : " << vol->getNumero() << " | " << vol->getDepart() << " -> "
+             << vol->getDestination() << " | Départ : " << vol->getDateDepart() << "\n"
+             << "   Paiement : ";
+        if (paiement)
+            paiement->afficher();
+        else
+            cout << "aucun\n";
+    }
+};
+
+// ======================================================================
+//  7. CLASSE AGENCE
+//  Regroupe les passagers, les vols et les réservations (vector).
+//  Les erreurs de gestion sont signalées par des exceptions.
+// ======================================================================
+
+class Agence {
+private:
+    vector<unique_ptr<Passager>> passagers;
+    vector<unique_ptr<Vol>> vols;
+    vector<unique_ptr<Reservation>> reservations;
+    int prochainIdPassager = 1;
+    int prochainIdReservation = 1;
+    int prochainIdPaiement = 1;
+
+    bool aDesReservations(const Passager* p) const {
+        for (const auto& r : reservations)
+            if (r->getPassager() == p) return true;
+        return false;
+    }
+    bool aDesReservations(const Vol* v) const {
+        for (const auto& r : reservations)
+            if (r->getVol() == v) return true;
+        return false;
+    }
+
+public:
+    // ---------------- Passagers ----------------
+    int ajouterPassager(const string& nom, const string& prenom, const string& tel,
+                        const string& email) {
+        passagers.push_back(make_unique<Passager>(prochainIdPassager, nom, prenom, tel, email));
+        return prochainIdPassager++;
+    }
+
+    Passager* rechercherPassager(int id) const {
+        for (const auto& p : passagers)
+            if (p->getId() == id) return p.get();
+        return nullptr;
+    }
+
+    void modifierPassager(int id, const string& nom, const string& prenom, const string& tel,
+                          const string& email) {
+        Passager* p = rechercherPassager(id);
+        if (!p) throw runtime_error("Passager introuvable.");
+        *p = Passager(id, nom, prenom, tel, email);  // le constructeur valide les données
+    }
+
+    void supprimerPassager(int id) {
+        Passager* p = rechercherPassager(id);
+        if (!p) throw runtime_error("Passager introuvable.");
+        if (aDesReservations(p))
+            throw runtime_error("Suppression impossible : ce passager a des réservations.");
+        passagers.erase(remove_if(passagers.begin(), passagers.end(),
+                                  [p](const unique_ptr<Passager>& x) { return x.get() == p; }),
+                        passagers.end());
+    }
+
+    // ---------------- Vols ----------------
+    void ajouterVol(const string& numero, const string& depart, const string& destination,
+                    const string& date, int capacite) {
+        if (rechercherVol(numero)) throw runtime_error("Ce numéro de vol existe déjà.");
+        auto vol = make_unique<Vol>(numero, depart, destination, date, capacite);
+        if (vol->dejaParti()) throw runtime_error("La date de départ est déjà passée.");
+        vols.push_back(move(vol));
+    }
+
+    Vol* rechercherVol(const string& numero) const {
+        string cherche = enMajuscules(numero);
+        for (const auto& v : vols)
+            if (v->getNumero() == cherche) return v.get();
+        return nullptr;
+    }
+
+    // Recherche par numéro de vol, ville de départ ou destination
+    vector<Vol*> rechercherVols(const string& critere) const {
+        string c = enMajuscules(critere);
+        vector<Vol*> trouves;
+        for (const auto& v : vols)
+            if (v->getNumero() == c || enMajuscules(v->getDepart()) == c ||
+                enMajuscules(v->getDestination()) == c)
+                trouves.push_back(v.get());
+        return trouves;
+    }
+
+    void modifierVol(const string& numero, const string& depart, const string& destination,
+                     const string& date, int capacite) {
+        Vol* v = rechercherVol(numero);
+        if (!v) throw runtime_error("Vol introuvable.");
+        Vol verif(numero, depart, destination, date, capacite);  // valide les champs
+        v->setCapacite(capacite);  // refuse une capacité < places déjà réservées
+        v->setDepart(depart);
+        v->setDestination(destination);
+        v->setDateDepart(date);
+    }
+
+    void supprimerVol(const string& numero) {
+        Vol* v = rechercherVol(numero);
+        if (!v) throw runtime_error("Vol introuvable.");
+        if (aDesReservations(v))
+            throw runtime_error("Suppression impossible : ce vol a des réservations.");
+        vols.erase(remove_if(vols.begin(), vols.end(),
+                             [v](const unique_ptr<Vol>& x) { return x.get() == v; }),
+                   vols.end());
+    }
+
+    void afficherVolsDisponibles() const {
+        bool trouve = false;
+        for (const auto& v : vols)
+            if (v->estDisponible()) {
+                v->afficher();
+                trouve = true;
+            }
+        if (!trouve) cout << "Aucun vol disponible.\n";
+    }
+
+    // ---------------- Réservations ----------------
+    Reservation* rechercherReservation(int id) const {
+        for (const auto& r : reservations)
+            if (r->getId() == id) return r.get();
+        return nullptr;
+    }
+
+    Reservation* reserver(int idPassager, const string& numeroVol) {
+        // Règle 1 : le passager doit être enregistré
+        Passager* p = rechercherPassager(idPassager);
+        if (!p) throw runtime_error("Passager non enregistré : enregistrez-le d'abord.");
+
+        Vol* v = rechercherVol(numeroVol);
+        if (!v) throw runtime_error("Vol introuvable.");
+        if (v->dejaParti()) throw runtime_error("Ce vol est déjà parti.");
+
+        // Règle 3 : pas deux réservations actives sur le même vol
+        for (const auto& r : reservations)
+            if (!r->estAnnulee() && r->getPassager() == p && r->getVol() == v)
+                throw runtime_error("Ce passager a déjà une réservation pour ce vol.");
+
+        // Règle 2 : le vol ne doit pas être complet
+        if (v->placesDisponibles() <= 0) throw runtime_error("Vol complet.");
+
+        reservations.push_back(make_unique<Reservation>(prochainIdReservation++, p, v));
+        return reservations.back().get();
+    }
+
+    // Le paiement valide la réservation (règles 5 et 6)
+    void payer(int idReservation, double montant) {
+        Reservation* r = rechercherReservation(idReservation);
+        if (!r) throw runtime_error("Réservation introuvable.");
+        r->enregistrerPaiement(make_unique<Paiement>(prochainIdPaiement, montant));
+        ++prochainIdPaiement;  // uniquement si le paiement a réussi
+    }
+
+    // Règle 7 : remboursement selon le statut prévu par l'application :
+    // remboursé si l'annulation a lieu plus de 24 h avant l

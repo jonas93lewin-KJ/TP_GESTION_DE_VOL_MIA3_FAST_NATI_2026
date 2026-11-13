@@ -1,0 +1,107 @@
+@startuml
+title Agence de voyage - Diagramme de classes
+
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+
+enum StatutReservation {
+  EN_ATTENTE
+  VALIDEE
+  ANNULEE
+}
+
+enum StatutPaiement {
+  PAYE
+  REMBOURSE
+  NON_REMBOURSABLE
+}
+
+class Passager {
+  - id : int
+  - nom : string
+  - prenom : string
+  - telephone : string
+  - email : string
+  + getId() : int
+  + getNom() : string
+  + setNom(nom : string) : void
+  + afficher() : void
+}
+
+class Vol {
+  - numero : string
+  - depart : string
+  - destination : string
+  - dateDepart : string
+  - capacite : int
+  - placesReservees : int
+  + getNumero() : string
+  + getCapacite() : int
+  + placesDisponibles() : int
+  + reserverPlace() : bool
+  + libererPlace() : void
+  + afficher() : void
+}
+
+class Reservation {
+  - id : int
+  - dateReservation : string
+  - statut : StatutReservation
+  + getId() : int
+  + getStatut() : StatutReservation
+  + valider() : bool
+  + annuler() : void
+  + estAnnulee() : bool
+  + afficher() : void
+}
+ 
+class Paiement {
+  - id : int
+  - montant : double
+  - datePaiement : string
+  - statut : StatutPaiement
+  + effectuer() : bool
+  + rembourser() : void
+  + getStatut() : StatutPaiement
+  + afficher() : void
+}
+
+class Agence {
+  - passagers : vector<Passager>
+  - vols : vector<Vol>
+  - reservations : vector<Reservation>
+  + ajouterPassager(p : Passager) : void
+  + modifierPassager(id : int) : void
+  + supprimerPassager(id : int) : void
+  + rechercherPassager(id : int) : Passager*
+  + ajouterVol(v : Vol) : void
+  + modifierVol(numero : string) : void
+  + supprimerVol(numero : string) : void
+  + rechercherVol(numero : string) : Vol*
+  + reserver(idPassager : int, numeroVol : string) : Reservation*
+  + payer(idReservation : int, montant : double) : bool
+  + annuler(idReservation : int) : void
+}
+
+Passager "1" -- "0..*" Reservation : effectue >
+Vol "1" -- "0..*" Reservation : concerne <
+Reservation "1" -- "0..1" Paiement : est réglée par >
+
+Reservation ..> StatutReservation
+Paiement ..> StatutPaiement
+
+Agence "1" o-- "0..*" Passager : gère
+Agence "1" o-- "0..*" Vol : gère
+Agence "1" o-- "0..*" Reservation : gère
+
+note bottom of Reservation
+  Règles : un seul passager et un seul vol.
+  Place comptée seulement quand statut = VALIDEE.
+  Une réservation ANNULEE ne peut plus être payée.
+end note
+
+note bottom of Vol
+  placesReservees <= capacite
+end note
+
+@enduml

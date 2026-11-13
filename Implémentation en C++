@@ -554,5 +554,226 @@ public:
         ++prochainIdPaiement;  // uniquement si le paiement a réussi
     }
 
-    // Règle 7 : remboursement selon le statut prévu par l'application :
-    // remboursé si l'annulation a lieu plus de 24 h avant l
+        // remboursé si l'annulation a lieu plus de 24 h avant le départ,
+    // sinon non remboursable.
+    void annuler(int idReservation) {
+        Reservation* r = rechercherReservation(idReservation);
+        if (!r) throw runtime_error("Réservation introuvable.");
+        if (r->estAnnulee()) throw runtime_error("Cette réservation est déjà annulée.");
+
+        r->annuler();
+
+        Paiement* p = r->getPaiement();
+        if (p != nullptr && p->getStatut() == StatutPaiement::PAYE) {
+            if (r->getVol()->departDansPlusDe24h())
+                p->rembourser();
+            else
+                p->refuserRemboursement();
+        }
+    }
+};
+
+// ======================================================================
+//  8. SAISIE EN CONSOLE (avec contrôle des erreurs de saisie)
+// ======================================================================
+
+string lireTexte(const string& invite) {
+    cout << invite;
+    string s;
+    if (!getline(cin, s)) {
+        cout << "\nFin de la saisie.\n";
+        exit(0);
+    }
+    return nettoyer(s);
+}
+
+// Redemande la saisie tant que la valeur n'est pas valide
+string lireValide(const string& invite, const function<bool(const string&)>& valide,
+                  const string& messageErreur) {
+    while (true) {
+        string s = lireTexte(invite);
+        if (valide(s)) return s;
+        cout << messageErreur << "\n";
+    }
+}
+
+int lireEntier(const string& invite) {
+    while (true) {
+        string s = lireTexte(invite);
+        try {
+            size_t pos = 0;
+            int valeur = stoi(s, &pos);
+            if (pos == s.size()) return valeur;
+        } catch (...) {
+        }
+        cout << "Entrée invalide : saisissez un nombre entier.\n";
+    }
+}
+
+int lireEntierPositif(const string& invite) {
+    while (true) {
+        int n = lireEntier(invite);
+        if (n > 0) return n;
+        cout << "La valeur doit être supérieure à 0.\n";
+    }
+}
+
+double lireReelPositif(const string& invite) {
+    while (true) {
+        string s = lireTexte(invite);
+        replace(s.begin(), s.end(), ',', '.');
+        try {
+            size_t pos = 0;
+            double valeur = stod(s, &pos);
+            if (pos == s.size()) {
+                if (valeur > 0) return valeur;
+                cout << "Le montant doit être supérieur à 0.\n";
+                continue;
+            }
+        } catch (...) {
+        }
+        cout << "Entrée invalide : saisissez un nombre.\n";
+    }
+}
+
+// ======================================================================
+//  9. ACTIONS DU MENU
+// ======================================================================
+
+void enregistrerPassager(Agence& agence) {
+    cout << "\n--- Enregistrer un passager ---\n";
+    string nom = lireValide("Nom : ", [](const string& s) { return !s.empty(); },
+                            "Le nom est obligatoire.");
+    string prenom = lireValide("Prénom : ", [](const string& s) { return !s.empty(); },
+                               "Le prénom est obligatoire.");
+    string tel = lireValide("Téléphone : ", telephoneValide,
+                            "Téléphone invalide (8 à 15 chiffres attendus).");
+    string email = lireValide("Email : ", emailValide, "Email invalide (exemple : nom@mail.com).");
+    int id = agence.ajouterPassager(nom, prenom, tel, email);
+    cout << "Passager enregistré avec le n°" << id << ".\n";
+}
+
+void ajouterVol(Agence& agence) {
+    cout << "\n--- Ajouter un vol ---\n";
+    string numero = lireValide("Numéro du vol : ", [](const string& s) { return !s.empty(); },
+                               "Le numéro de vol est obligatoire.");
+    string depart = lireValide("Ville de départ : ", [](const string& s) { return !s.empty(); },
+                               "La ville de départ est obligatoire.");
+    string destination = lireValide("Destination : ", [](const string& s) { return !s.empty(); },
+                                    "La destination est obligatoire.");
+    string date = lireValide("Date de départ (JJ/MM/AAAA) : ", dateValide,
+                             "Date invalide (format JJ/MM/AAAA).");
+    int capacite = lireEntierPositif("Capacité (nombre de places) : ");
+    agence.ajouterVol(numero, depart, destination, date, capacite);
+    cout << "Vol ajouté.\n";
+}
+
+void afficherVolsDisponibles(const Agence& agence) {
+    cout << "\n--- Vols disponibles ---\n";
+    agence.afficherVolsDisponibles();
+}
+
+void rechercherUnVol(const Agence& agence) {
+    cout << "\n--- Rechercher un vol ---\n";
+    string critere = lireValide("Numéro de vol, ville de départ ou destination : ",
+                                [](const string& s) { return !s.empty(); },
+                                "Saisissez un critère de recherche.");
+    vector<Vol*> trouves = agence.rechercherVols(critere);
+    if (trouves.empty()) cout << "Aucun vol trouvé.\n";
+    for (const Vol* v : trouves) v->afficher();
+}
+
+void effectuerReservation(Agence& agence) {
+    cout << "\n--- Effectuer une réservation ---\n";
+    int idPassager = lireEntier("N° du passager : ");
+    string numeroVol = lireValide("Numéro du vol : ", [](const string& s) { return !s.empty(); },
+                                  "Le numéro de vol est obligatoire.");
+    Reservation* r = agence.reserver(idPassager, numeroVol);
+    cout << "Réservation créée. Elle sera validée à l'enregistrement du paiement.\n";
+    r->resume();
+}
+
+void enregistrerPaiement(Agence& agence) {
+    cout << "\n--- Enregistrer un paiement ---\n";
+    int id = lireEntier("N° de la réservation : ");
+    double montant = lireReelPositif("Montant : ");
+    agence.payer(id, montant);
+    cout << "Paiement enregistré : la réservation est validée, la place est réservée.\n";
+}
+
+void annulerReservation(Agence& agence) {
+    cout << "\n--- Annuler une réservation ---\n";
+    int id = lireEntier("N° de la réservation à annuler : ");
+    agence.annuler(id);
+    cout << "Réservation annulée.\n";
+    agence.rechercherReservation(id)->afficher();
+}
+
+void consulterReservation(const Agence& agence) {
+    cout << "\n--- Consulter une réservation ---\n";
+    Reservation* r = agence.rechercherReservation(lireEntier("N° de la réservation : "));
+    if (r)
+        r->resume();
+    else
+        cout << "Réservation introuvable.\n";
+}
+
+void afficherInfosReservation(const Agence& agence) {
+    cout << "\n--- Informations d'une réservation ---\n";
+    Reservation* r = agence.rechercherReservation(lireEntier("N° de la réservation : "));
+    if (r)
+        r->afficher();
+    else
+        cout << "Réservation introuvable.\n";
+}
+
+// ======================================================================
+//  10. PROGRAMME PRINCIPAL
+// ======================================================================
+
+void afficherMenu() {
+    cout << "\n========== AGENCE DE VOYAGE ==========\n"
+         << " 1. Enregistrer un passager\n"
+         << " 2. Ajouter un vol\n"
+         << " 3. Afficher les vols disponibles\n"
+         << " 4. Rechercher un vol\n"
+         << " 5. Effectuer une réservation\n"
+         << " 6. Enregistrer un paiement\n"
+         << " 7. Annuler une réservation\n"
+         << " 8. Consulter une réservation\n"
+         << " 9. Afficher les informations d'une réservation\n"
+         << "10. Quitter\n";
+}
+
+int main() {
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);  // affichage correct des accents sous Windows
+#endif
+    cout << fixed << setprecision(2);
+
+    Agence agence;
+    int choix;
+    do {
+        afficherMenu();
+        choix = lireEntier("Votre choix : ");
+        try {
+            switch (choix) {
+                case 1: enregistrerPassager(agence); break;
+                case 2: ajouterVol(agence); break;
+                case 3: afficherVolsDisponibles(agence); break;
+                case 4: rechercherUnVol(agence); break;
+                case 5: effectuerReservation(agence); break;
+                case 6: enregistrerPaiement(agence); break;
+                case 7: annulerReservation(agence); break;
+                case 8: consulterReservation(agence); break;
+                case 9: afficherInfosReservation(agence); break;
+                case 10: cout << "Au revoir !\n"; break;
+                default: cout << "Choix invalide : entrez un nombre entre 1 et 10.\n";
+            }
+        } catch (const exception& e) {
+            cout << "Erreur : " << e.what() << "\n";
+        }
+    } while (choix != 10);
+
+    return 0;
+}
